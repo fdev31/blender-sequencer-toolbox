@@ -1,3 +1,3 @@
 # Installation
 
-Copy ``~/.blender/<blender version>/scripts/addons/``
+Copy to ``~/.config/blender/<blender version>/scripts/addons/``
