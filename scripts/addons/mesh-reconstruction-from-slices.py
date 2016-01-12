@@ -36,7 +36,7 @@ LAYERS = None
 REF_SIZE = None
 
 def get_z_from_layer(layer):
-    return ((LAYERS - layer)/LAYERS)*REF_SIZE 
+    return ((LAYERS - layer)/LAYERS)*REF_SIZE
 
 def listing(path):
     return sorted((x for x in os.listdir(path) if x.endswith('.png') and not x.startswith('contour_')))
@@ -56,7 +56,7 @@ class SimpleOperator(bpy.types.Operator):
     contours_max = bpy.props.IntProperty(name="Feat. detection: max / slice", default=100, min=1, max=500)
     contours_min_size = bpy.props.IntProperty(name="Feat. detection minimum size", default=200, min=3, max=20000)
     contours_threshold = bpy.props.FloatProperty(name="Threshold", default=0.01, min=0, max=1)
-    
+
     remove_doubles = bpy.props.BoolProperty(name="Remove doubles", default=True)
 
     def execute(self, context):
@@ -81,7 +81,7 @@ class SimpleOperator(bpy.types.Operator):
         MAX_CONTOUR = self.contours_max
         MIN_CONTOUR_SIZE = self.contours_min_size
         THRESHOLD = self.contours_threshold
-        
+
         c_cache_file = os.path.join(PATH, 'contours.js')
         if os.path.exists(c_cache_file) and not 'REREAD' in os.environ:
             c_cache = json.load(open(c_cache_file))
@@ -93,11 +93,17 @@ class SimpleOperator(bpy.types.Operator):
         ALL_FILES = tuple(listing(PATH))
 
         dirty = not c_cache
+
+        wm = bpy.context.window_manager # notify progress
+
         if dirty:
+            wm.progress_begin(0, len(ALL_FILES))
             c_cache = {
                     'contours': []
                     }
+
             for layer, filename in enumerate(ALL_FILES):
+                wm.progress_update(layer)
                 if RANGE:
                     if layer < RANGE[0]:
                         continue
@@ -117,8 +123,9 @@ class SimpleOperator(bpy.types.Operator):
 
                 contours = measure.find_contours(data, THRESHOLD)
                 c_cache['contours'].append([{'size': int(c.size), 'coords': [tuple(pos[:2]) for pos in c]} for c in contours])
-        if dirty:
+
             print("Saving...")
+            wm.progress_end()
             json.dump(c_cache, open(c_cache_file, 'w'))
 
         print("\nGenerating K-D Trees")
@@ -126,10 +133,12 @@ class SimpleOperator(bpy.types.Operator):
         _v = [] # k-d trees by layers
         real_contours = []
 
+        wm.progress_begin(0, len(c_cache['contours']))
         for num, layer in enumerate(c_cache['contours']):
+            wm.progress_update(num)
             real_contours.append( [] )
             tree = kdtree.KDTree(sum(contour['size'] for contour in layer))
-                        
+
             if RANGE:
                 if num < RANGE[0] or num > RANGE[1]:
                     tree.balance()
@@ -168,6 +177,7 @@ class SimpleOperator(bpy.types.Operator):
                 real_contours[-1].append(this_contour)
             tree.balance()
             _v.append(tree)
+        wm.progress_end()
 
         #cf: https://www.blender.org/api/blender_python_api_2_73_release/mathutils.kdtree.html
         def get_nearest(layer, x, y):
@@ -179,11 +189,13 @@ class SimpleOperator(bpy.types.Operator):
         edges = []
         faces = []
         vert_count = itertools.count()
-       
+
         tot_vtx = itertools.count()
         ref_offset = -REF_SIZE/2
 
+        wm.progress_begin(0, len(real_contours))
         for layer, contours in enumerate(real_contours): # from bottom to top
+            wm.progress_update(layer)
             if RANGE:
                 if layer < RANGE[0]:
                     continue
@@ -209,7 +221,7 @@ class SimpleOperator(bpy.types.Operator):
 
                     if  dist != None and dist < TENSION_MAX:
                         # add edge
-                        if p_i: 
+                        if p_i:
                             left_idx = i-1
                         else: # if first vertex, link last
                             left_idx = i+len(contour)-1
@@ -226,6 +238,7 @@ class SimpleOperator(bpy.types.Operator):
                                 if p_i > 0:
                                     faces.append( [i, left_idx] + list(range(former_bottom_idx, vx_idx+1)) )
 
+        wm.progress_end()
         create_mesh_object(bpy.context, verts, edges, faces, "ImportedFromSequence", True, None)
         context.selected_objects[0].data.validate()
         if self.remove_doubles:
@@ -243,7 +256,7 @@ class VIEW3D_PT_tools_Meshify(Panel):
     bl_idname = "OBJECT_OT_slicify"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'TOOLS'
-    
+
     def draw(self, context):
         layout = self.layout
         obj = context.object
@@ -252,16 +265,16 @@ class VIEW3D_PT_tools_Meshify(Panel):
         col.prop(obj, "source_slices", expand=True, text="")
         col.prop(obj, "source_slices_size", expand=True, text="Images size")
         col.prop(obj, "source_slices_nr", expand=True, text="Number of images")
-     
+
         col.prop(obj, "partial_slices", expand=True, text="Render subrange")
         scol = col.row(align=True)
         scol.active = obj.partial_slices
         scol.prop(obj, "partial_slices_start",expand=True, text="Start")
         scol.prop(obj, "partial_slices_end", expand=True, text="End")
 
-        col = layout.column(align=True)        
+        col = layout.column(align=True)
         col.operator("object.meslicify", emboss=True)
-        
+
 def register():
     bpy.utils.register_class(SimpleOperator)
     bpy.utils.register_class(VIEW3D_PT_tools_Meshify)
@@ -271,11 +284,12 @@ def unregister():
     bpy.utils.unregister_class(SimpleOperator)
 
 if __name__ == "__main__":
-  
+
     bpy.types.Object.source_slices =  bpy.props.StringProperty(default="/tmp/", subtype="DIR_PATH")
     bpy.types.Object.source_slices_size = bpy.props.IntProperty(default=512, min=16, max=1024)
-    bpy.types.Object.source_slices_nr = bpy.props.IntProperty(default=320, min=2, max=1024)    
+    bpy.types.Object.source_slices_nr = bpy.props.IntProperty(default=320, min=2, max=1024)
     bpy.types.Object.partial_slices_start = bpy.props.IntProperty(default=0, min=0, max=320)
     bpy.types.Object.partial_slices_end = bpy.props.IntProperty(default=0, min=0, max=320)
     bpy.types.Object.partial_slices = bpy.props.BoolProperty()
     register()
+
