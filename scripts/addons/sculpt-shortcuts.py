@@ -22,10 +22,37 @@ bl_info = {
     'tracker_url': '',
     'category': 'System'}
 
+import os
 import bpy
 from bpy.types import Menu, Panel, UIList
 from bl_ui.properties_paint_common import UnifiedPaintPanel
 import itertools
+
+class PrepareSculpt(bpy.types.Operator):
+    " Setup convenient sculpt settings "
+    bl_idname = "shortbrush.prepare_setup"
+    bl_label = "Switch mode"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        view = context.space_data
+        sculpt = context.tool_settings.sculpt
+        if not context.sculpt_object.use_dynamic_topology_sculpting:
+            bpy.ops.sculpt.dynamic_topology_toggle()
+        view.viewport_shade = "SOLID"
+        view.use_matcap = True
+        context.space_data.matcap_icon = '04'
+        sculpt.use_smooth_shading = True
+        sculpt.brush.use_frontface = True
+        if sculpt.detail_type_method != 'CONSTANT':
+            sculpt.detail_type_method = 'CONSTANT'
+        else:
+            sculpt.detail_type_method = 'BRUSH'
+        sculpt.constant_detail = 3 # percentage
+        sculpt.detail_percent = 15
+        view.lens = 55
+        os.system('/home/fab/wacom_sculpt.sh')
+        return {'FINISHED'}
 
 class ToggleSculpt(bpy.types.Operator):
     " Toggle between brushes "
@@ -74,34 +101,48 @@ class VIEW3D_PT_tools_test(Panel, UnifiedPaintPanel):
         settings = self.paint_settings(context)
         brush = settings.brush
         capabilities = brush.sculpt_capabilities
+        view = context.space_data
 
         box = layout.box()
 
-        rr = box.row()
-        if context.sculpt_object.use_dynamic_topology_sculpting:
-            rr.operator("sculpt.dynamic_topology_toggle", icon='SOLO_ON', text="")
-        else:
-            rr.operator("sculpt.dynamic_topology_toggle", icon='SOLO_OFF', text="")
-        rr.prop(sculpt, "use_smooth_shading", text="Smooth")
-        col = box.column()
-        col.active = context.sculpt_object.use_dynamic_topology_sculpting
-        sub = col.column(align=True)
-        sub.active = (brush and brush.sculpt_tool != 'MASK')
-        if (sculpt.detail_type_method == 'CONSTANT'):
-            row = sub.row(align=True)
-            row.prop(sculpt, "constant_detail")
-            row.operator("sculpt.sample_detail_size", text="", icon='EYEDROPPER')
-        elif (sculpt.detail_type_method == 'BRUSH'):
-            sub.prop(sculpt, "detail_percent")
-        else:
-            sub.prop(sculpt, "detail_size")
-        sub.prop(sculpt, "detail_type_method", text="")
-       
-        row = box.row()
-        row.prop(brush, "use_frontface", text="Face")
-        if capabilities.has_accumulate:
-            row.prop(brush, "use_accumulate", text="Spray")
 
+        # settings / dyntopo
+        x = box.row()
+        x.operator("shortbrush.prepare_setup")
+        
+        if not context.sculpt_object.use_dynamic_topology_sculpting:
+            x.operator("sculpt.dynamic_topology_toggle", icon='SOLO_OFF', text="")
+        else:
+            x.operator("sculpt.dynamic_topology_toggle", icon='SOLO_ON', text="")
+
+            rr = box.row()
+            rr.prop(sculpt, "use_smooth_shading", text="Smooth")
+
+#        rr.prop(brush, "use_frontface", text="Face")
+            if capabilities.has_accumulate:
+                rr.prop(brush, "use_accumulate", text="Spray")
+
+            col = box.column()
+            col.active = context.sculpt_object.use_dynamic_topology_sculpting
+            sub = col.column(align=True)
+
+            sub.active = (brush and brush.sculpt_tool != 'MASK')
+            if (sculpt.detail_type_method == 'CONSTANT'):
+                row = sub.row(align=True)
+                row.prop(sculpt, "constant_detail")
+                row.operator("sculpt.sample_detail_size", text="", icon='EYEDROPPER')
+            elif (sculpt.detail_type_method == 'BRUSH'):
+                sub.prop(sculpt, "detail_percent")
+            else:
+                sub.prop(sculpt, "detail_size")
+            sub.prop(sculpt, "detail_type_method", text="")
+            
+            r = sub.row(align=True)
+            r.operator("sculpt.optimize")
+            if (sculpt.detail_type_method == 'CONSTANT'):
+                r.operator("sculpt.detail_flood_fill")
+
+        # Brush selection            
         col = box.column(align=True)
 
         x = col.operator("shortbrush.toggle_type", icon="TRIA_UP", text="")
@@ -122,28 +163,21 @@ class VIEW3D_PT_tools_test(Panel, UnifiedPaintPanel):
         x.change_row = True
         x.invert_sense = False
 
-
-#        col.separator()
-#        col.operator("sculpt.optimize")
-#        if (sculpt.detail_type_method == 'CONSTANT'):
-#            col.operator("sculpt.detail_flood_fill")
-        
-
+        # mask box
         box = layout.box()
-        box.label(text="Mask mode")
-        col = box.column(align=True)
-        x = col.operator("paint.brush_select", text="Toggle")
+        box.label(text="Mask toggle / fill / invert")
+        r = box.row(align=True)
+        x = r.operator("paint.brush_select", text="Tog", icon="BRUSH_MASK")
         x.paint_mode="SCULPT"
         x.sculpt_tool="MASK"
         x.toggle=True
         x.create_missing=True
 
-        r = col.row(align=True)
-        x = r.operator("paint.mask_flood_fill", text="Fill")
+        x = r.operator("paint.mask_flood_fill", text="Fill", icon="BRUSH_TEXMASK")
         x.mode = 'VALUE'
         x.value = 1
 
-        x = r.operator("paint.mask_flood_fill", text="Invert")
+        x = r.operator("paint.mask_flood_fill", text="Inv", icon="BRUSH_TEXDRAW")
         x.mode = 'INVERT'
 
 plug_keymap = []
