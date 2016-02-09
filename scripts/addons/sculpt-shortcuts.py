@@ -51,6 +51,7 @@ class PrepareSculpt(bpy.types.Operator):
         sculpt.constant_detail = 3 # percentage
         sculpt.detail_percent = 15
         view.lens = 55
+        context.user_preferences.view.use_rotate_around_active = True
         os.system('/home/fab/wacom_sculpt.sh')
         return {'FINISHED'}
 
@@ -73,7 +74,6 @@ class ToggleSculpt(bpy.types.Operator):
             else:
                 self.b_row = (self.b_row + 1) % len(BRUSH_SET)
             self.b_col = 0
-
         else:
             if self.invert_sense:
                 self.b_col = (self.b_col - 1) if self.b_col > 0 else len(BRUSH_SET[self.b_row]) - 1
@@ -86,7 +86,7 @@ class VIEW3D_PT_tools_test(Panel, UnifiedPaintPanel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'TOOLS'
     bl_category = "Tools"
-    bl_label = "Shortcuts"
+    bl_label = "Shortcut"
 
     @classmethod
     def poll(cls, context):
@@ -94,8 +94,6 @@ class VIEW3D_PT_tools_test(Panel, UnifiedPaintPanel):
 
     def draw(self, context):
         layout = self.layout
-
-
         toolsettings = context.tool_settings
         sculpt = toolsettings.sculpt
         settings = self.paint_settings(context)
@@ -190,11 +188,11 @@ def register():
 
     kmi = km.keymap_items.new(ToggleSculpt.bl_idname, 'X', 'PRESS')
     kmi.properties.invert_sense = False
-    kmi.properties.change_row = False    
-    kmi = km.keymap_items.new(ToggleSculpt.bl_idname, 'X', 'PRESS', ctrl=True)
-    kmi.properties.invert_sense = True
-    kmi.properties.change_row = False    
+    kmi.properties.change_row = False
     kmi = km.keymap_items.new(ToggleSculpt.bl_idname, 'X', 'PRESS', shift=True)
+    kmi.properties.invert_sense = True
+    kmi.properties.change_row = False
+    kmi = km.keymap_items.new(ToggleSculpt.bl_idname, 'X', 'PRESS', ctrl=True)
     kmi.properties.change_row = True
     kmi.properties.invert_sense = False
     kmi = km.keymap_items.new(ToggleSculpt.bl_idname, 'X', 'PRESS', shift=True, ctrl=True)
