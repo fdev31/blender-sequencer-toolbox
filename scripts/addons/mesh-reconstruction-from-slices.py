@@ -17,20 +17,18 @@ import itertools
 from random import random
 
 # requires:
-# matplotlib
-# scipy
 # scikit-image
+# numpy
 
 import numpy as np
-import scipy
 from skimage import measure # find contours
 from skimage.io import imread
 
 import bpy
+import bmesh
 from bpy.types import Panel
 from mathutils import Vector, geometry, kdtree
 
-from add_mesh_BoltFactory.createMesh import create_mesh_object
 
 LAYERS = None
 REF_SIZE = None
@@ -85,10 +83,8 @@ class SimpleOperator(bpy.types.Operator):
         c_cache_file = os.path.join(PATH, 'contours.js')
         if os.path.exists(c_cache_file) and not 'REREAD' in os.environ:
             c_cache = json.load(open(c_cache_file))
-            fresh_data = False
         else:
             c_cache = False
-            fresh_data = True
 
         ALL_FILES = tuple(listing(PATH))
 
@@ -205,7 +201,8 @@ class SimpleOperator(bpy.types.Operator):
 
             vx_idx = 0
             for contour in contours:
-                print("C %d"%(len(contour)))
+
+                #print("C %d"%(len(contour)))
 
                 for p_i, p in enumerate(contour):
                     # add vertex                    
@@ -233,14 +230,40 @@ class SimpleOperator(bpy.types.Operator):
                             edges.append( (i, vx_idx) )
 
                             if former_bottom_idx == vx_idx: # tri
-                                faces.append( (left_idx, vx_idx, i) )
+                               faces.append( (left_idx, vx_idx, i) )
                             else:
                                 if p_i > 0:
                                     faces.append( [i, left_idx] + list(range(former_bottom_idx, vx_idx+1)) )
 
         wm.progress_end()
-        create_mesh_object(bpy.context, verts, edges, faces, "ImportedFromSequence", True, None)
-        context.selected_objects[0].data.validate()
+
+        mesh = bpy.data.meshes.new("Made from slices")
+        new_obj = bpy.data.objects.new("FromSlices", mesh)
+
+
+        scene = bpy.context.scene
+        scene.objects.link(new_obj)  # put the object into the scene (link)
+        scene.objects.active = new_obj  # set as the active object in the scene
+        new_obj.select = True  # select object
+
+        mesh = new_obj.data
+        bm = bmesh.new()
+
+        for i, v in enumerate(verts):
+            bm.verts.new(v)  # add a new vert
+
+        bm.verts.ensure_lookup_table()
+        for e in edges:
+            bm.edges.new(tuple(bm.verts[c] for c in e))  # add a new edges
+
+        for f in faces:
+            if len(f) > 2:
+                bm.faces.new(tuple(bm.verts[c] for c in f))  # add a new faces
+
+        # make the bmesh the object's mesh
+        bm.to_mesh(mesh)
+        bm.free()  # always do this when finished
+
         if self.remove_doubles:
             bpy.ops.object.editmode_toggle()
             bpy.ops.mesh.select_all(action='TOGGLE')
@@ -260,20 +283,20 @@ class VIEW3D_PT_tools_Meshify(Panel):
     def draw(self, context):
         layout = self.layout
         obj = context.object
+        if obj:
+            col = layout.column(align=True)
+            col.prop(obj, "source_slices", expand=True, text="")
+            col.prop(obj, "source_slices_size", expand=True, text="Images size")
+            col.prop(obj, "source_slices_nr", expand=True, text="Number of images")
 
-        col = layout.column(align=True)
-        col.prop(obj, "source_slices", expand=True, text="")
-        col.prop(obj, "source_slices_size", expand=True, text="Images size")
-        col.prop(obj, "source_slices_nr", expand=True, text="Number of images")
+            col.prop(obj, "partial_slices", expand=True, text="Render subrange")
+            scol = col.row(align=True)
+            scol.active = obj.partial_slices
+            scol.prop(obj, "partial_slices_start",expand=True, text="Start")
+            scol.prop(obj, "partial_slices_end", expand=True, text="End")
 
-        col.prop(obj, "partial_slices", expand=True, text="Render subrange")
-        scol = col.row(align=True)
-        scol.active = obj.partial_slices
-        scol.prop(obj, "partial_slices_start",expand=True, text="Start")
-        scol.prop(obj, "partial_slices_end", expand=True, text="End")
-
-        col = layout.column(align=True)
-        col.operator("object.meslicify", emboss=True)
+            col = layout.column(align=True)
+            col.operator("object.meslicify", emboss=True)
 
 def register():
     bpy.utils.register_class(SimpleOperator)
