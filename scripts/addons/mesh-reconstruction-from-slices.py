@@ -201,7 +201,6 @@ class SimpleOperator(bpy.types.Operator):
 
             vx_idx = 0
             for contour in contours:
-
                 #print("C %d"%(len(contour)))
 
                 for p_i, p in enumerate(contour):
@@ -212,7 +211,7 @@ class SimpleOperator(bpy.types.Operator):
                         SCALE * (1 - (z/REF_SIZE))) )
 
                     former_bottom_idx = vx_idx
-                    # find two nearest & connect two triangles
+                    # find the two nearest vertices & make two triangles
                     bottom_vx, vx_idx, dist = get_nearest(layer-1, p[0], p[1])
                     i = next(tot_vtx)
 
@@ -240,7 +239,6 @@ class SimpleOperator(bpy.types.Operator):
         mesh = bpy.data.meshes.new("Made from slices")
         new_obj = bpy.data.objects.new("FromSlices", mesh)
 
-
         scene = bpy.context.scene
         scene.objects.link(new_obj)  # put the object into the scene (link)
         scene.objects.active = new_obj  # set as the active object in the scene
@@ -252,13 +250,14 @@ class SimpleOperator(bpy.types.Operator):
         for i, v in enumerate(verts):
             bm.verts.new(v)  # add a new vert
 
-        bm.verts.ensure_lookup_table()
-        for e in edges:
-            bm.edges.new(tuple(bm.verts[c] for c in e))  # add a new edges
+        bm.verts.ensure_lookup_table() # required to iterate the edges
 
-        for f in faces:
+        for e in edges: # add edges
+            bm.edges.new(tuple(bm.verts[c] for c in e))
+
+        for f in faces: # add faces
             if len(f) > 2:
-                bm.faces.new(tuple(bm.verts[c] for c in f))  # add a new faces
+                bm.faces.new(tuple(bm.verts[c] for c in f))
 
         # make the bmesh the object's mesh
         bm.to_mesh(mesh)
