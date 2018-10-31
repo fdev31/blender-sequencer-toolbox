@@ -2,7 +2,7 @@ bl_info = {
     "name": "Scanner data importer",
     "author": "Fabien Devaux (fdev31)",
     "version": (1, 0, 0),
-    "blender": (2, 76, 0),
+    "blender": (2, 79, 0),
     "location": "3D Window > Tool Shelf > Meshify slices",
     "description": "Allows conversion of image sequence from DICOM data to be imported as mesh",
     "warning": "",
@@ -57,28 +57,130 @@ class SimpleOperator(bpy.types.Operator):
 
     remove_doubles = bpy.props.BoolProperty(name="Remove doubles", default=True)
 
+    def process_contours(self, layers, wm):
+        global RANGE
+        _c = itertools.count() # vertex count
+        kdtrees = []
+        real_contours = []
+
+        for num, layer in enumerate(layers):
+            wm.progress_update(num)
+            real_contours.append( [] )
+            tree = kdtree.KDTree(sum(contour['size'] for contour in layer))
+
+            if RANGE:
+                if num < RANGE[0] or num > RANGE[1]:
+                    tree.balance()
+                    kdtrees.append(tree)
+                    continue
+
+            z = get_z_from_layer(num)
+
+            for n, contour in enumerate(layer):
+
+                if contour['size'] < self.contours_min_size:
+                    continue
+                if n > self.contours_max:
+                    break
+
+                this_contour = []
+                prev_vert = None
+                prev_tan = None
+                for rel_nr, v in enumerate(contour['coords']):
+                    skipped = False
+                    if prev_vert:
+                        try:
+                            tan = (v[1]-prev_vert[1]) / (v[0]-prev_vert[0])
+                        except ZeroDivisionError:
+                            skipped = True
+                            tan = 0
+                        else:
+                            if rel_nr%self.decimation_factor or (prev_tan and self.simplification_factor and abs(prev_tan-tan) <= self.simplification_factor):
+                                skipped = True
+                        prev_tan = tan
+                    prev_vert = v
+                    if not skipped:
+                        co = (v[0], v[1], z)
+                        tree.insert(co, next(_c))
+                        this_contour.append(co)
+                real_contours[-1].append(this_contour)
+
+            tree.balance()
+            kdtrees.append(tree)
+
+        self.kdtrees = kdtrees
+        return real_contours
+
+    def gen_mesh(self, real_contours, wm):
+        verts = []
+        edges = []
+        faces = []
+        vert_count = itertools.count()
+
+        tot_vtx = itertools.count()
+        ref_offset = -REF_SIZE/2
+
+        for layer, contours in enumerate(real_contours): # from bottom to top
+            wm.progress_update(layer)
+            if RANGE:
+                if layer < RANGE[0]:
+                    continue
+                elif layer > RANGE[1]:
+                    continue
+            z = get_z_from_layer(layer)
+
+            vx_idx = 0
+            for contour in contours:
+                #print("C %d"%(len(contour)))
+
+                for p_i, p in enumerate(contour):
+                    # add vertex                    
+                    verts.append(( # inverted X & Y for blender
+                        self.scale * (p[1]+ref_offset)/REF_SIZE,
+                        self.scale * (p[0]+ref_offset)/REF_SIZE,
+                        self.scale * (1 - (z/REF_SIZE))) )
+
+                    former_bottom_idx = vx_idx
+                    # find the two nearest vertices & make two triangles
+                    bottom_vx, vx_idx, dist = self.get_nearest(layer-1, p[0], p[1])
+                    i = next(tot_vtx)
+
+                    if  dist != None and dist < self.max_tension:
+                        # add edge
+                        if p_i:
+                            left_idx = i-1
+                        else: # if first vertex, link last
+                            left_idx = i+len(contour)-1
+                            #former_bottom_idx = get_nearest(layer-1, contour[-1][0], contour[-1][1])[1]
+
+                        edges.append((left_idx, i))
+
+                        if bottom_vx:
+                            edges.append( (i, vx_idx) )
+
+                            if former_bottom_idx == vx_idx: # tri
+                               faces.append( (left_idx, vx_idx, i) )
+                            else:
+                                if p_i > 0:
+                                    faces.append( [i, left_idx] + list(range(former_bottom_idx, vx_idx+1)) )
+        return verts, edges, faces
+
+    #cf: https://www.blender.org/api/blender_python_api_2_73_release/mathutils.kdtree.html
+    def get_nearest(self, layer, x, y):
+        return self.kdtrees[layer].find([x,y, get_z_from_layer(layer)])
+
     def execute(self, context):
         global LAYERS
         global REF_SIZE
+        global RANGE
         obj = context.selected_objects[0]
         print("Reloading state...")
         REF_SIZE = obj.source_slices_size # Z dimmension will be adapted accordingly
         DIM = [REF_SIZE, REF_SIZE, obj.source_slices_nr]
         LAYERS = DIM[2]
-        TENSION_MAX = self.max_tension
-        SCALE = self.scale
-        FACE_TOL = self.face_tolerance
-        DECIMATE = self.decimation_factor
-        DELTA = self.simplification_factor
         PATH = obj.source_slices # os.path.dirname(context.scene.render.filepath)
         if obj.partial_slices:
             RANGE = [obj.partial_slices_start, obj.partial_slices_end]
-        else:
-            RANGE = None
-
-        MAX_CONTOUR = self.contours_max
-        MIN_CONTOUR_SIZE = self.contours_min_size
-        THRESHOLD = self.contours_threshold
 
         c_cache_file = os.path.join(PATH, 'contours.js')
         if os.path.exists(c_cache_file) and not 'REREAD' in os.environ:
@@ -86,19 +188,19 @@ class SimpleOperator(bpy.types.Operator):
         else:
             c_cache = False
 
-        ALL_FILES = tuple(listing(PATH))
+        all_files = tuple(listing(PATH))
 
         dirty = not c_cache
 
         wm = bpy.context.window_manager # notify progress
 
         if dirty:
-            wm.progress_begin(0, len(ALL_FILES))
+            wm.progress_begin(0, len(all_files))
             c_cache = {
                     'contours': []
                     }
 
-            for layer, filename in enumerate(ALL_FILES):
+            for layer, filename in enumerate(all_files):
                 wm.progress_update(layer)
                 if RANGE:
                     if layer < RANGE[0]:
@@ -117,7 +219,7 @@ class SimpleOperator(bpy.types.Operator):
                     width, height = src.shape
                     data = np.array([ [src[y][x] for x in range(width)] for y in range(height) ])
 
-                contours = measure.find_contours(data, THRESHOLD)
+                contours = measure.find_contours(data, self.contours_threshold)
                 c_cache['contours'].append([{'size': int(c.size), 'coords': [tuple(pos[:2]) for pos in c]} for c in contours])
 
             print("Saving...")
@@ -125,115 +227,16 @@ class SimpleOperator(bpy.types.Operator):
             json.dump(c_cache, open(c_cache_file, 'w'))
 
         print("\nGenerating K-D Trees")
-        _c = itertools.count() # vertex count
-        _v = [] # k-d trees by layers
-        real_contours = []
 
         wm.progress_begin(0, len(c_cache['contours']))
-        for num, layer in enumerate(c_cache['contours']):
-            wm.progress_update(num)
-            real_contours.append( [] )
-            tree = kdtree.KDTree(sum(contour['size'] for contour in layer))
-
-            if RANGE:
-                if num < RANGE[0] or num > RANGE[1]:
-                    tree.balance()
-                    _v.append(tree)
-                    continue
-
-            z = get_z_from_layer(num)
-
-            for n, contour in enumerate(layer):
-
-                if contour['size'] < MIN_CONTOUR_SIZE:
-                    continue
-                if n > MAX_CONTOUR:
-                    break
-
-                this_contour = []
-                prev_vert = None
-                prev_tan = None
-                for rel_nr, v in enumerate(contour['coords']):
-                    skipped = False
-                    if prev_vert:
-                        try:
-                            tan = (v[1]-prev_vert[1]) / (v[0]-prev_vert[0])
-                        except ZeroDivisionError:
-                            skipped = True
-                            tan = 0
-                        else:
-                            if rel_nr%DECIMATE or (prev_tan and DELTA and abs(prev_tan-tan) <= DELTA):
-                                skipped = True
-                        prev_tan = tan
-                    prev_vert = v
-                    if not skipped:
-                        co = (v[0], v[1], z)
-                        tree.insert(co, next(_c))
-                        this_contour.append(co)
-                real_contours[-1].append(this_contour)
-            tree.balance()
-            _v.append(tree)
+        real_contours = self.process_contours(c_cache['contours'], wm)
         wm.progress_end()
 
-        #cf: https://www.blender.org/api/blender_python_api_2_73_release/mathutils.kdtree.html
-        def get_nearest(layer, x, y):
-            return _v[layer].find([x,y, get_z_from_layer(layer)])
 
         print('Generating Mesh data')
 
-        verts = []
-        edges = []
-        faces = []
-        vert_count = itertools.count()
-
-        tot_vtx = itertools.count()
-        ref_offset = -REF_SIZE/2
-
         wm.progress_begin(0, len(real_contours))
-        for layer, contours in enumerate(real_contours): # from bottom to top
-            wm.progress_update(layer)
-            if RANGE:
-                if layer < RANGE[0]:
-                    continue
-                elif layer > RANGE[1]:
-                    continue
-            z = get_z_from_layer(layer)
-
-            vx_idx = 0
-            for contour in contours:
-                #print("C %d"%(len(contour)))
-
-                for p_i, p in enumerate(contour):
-                    # add vertex                    
-                    verts.append(( # inverted X & Y for blender
-                        SCALE * (p[1]+ref_offset)/REF_SIZE,
-                        SCALE * (p[0]+ref_offset)/REF_SIZE,
-                        SCALE * (1 - (z/REF_SIZE))) )
-
-                    former_bottom_idx = vx_idx
-                    # find the two nearest vertices & make two triangles
-                    bottom_vx, vx_idx, dist = get_nearest(layer-1, p[0], p[1])
-                    i = next(tot_vtx)
-
-                    if  dist != None and dist < TENSION_MAX:
-                        # add edge
-                        if p_i:
-                            left_idx = i-1
-                        else: # if first vertex, link last
-                            left_idx = i+len(contour)-1
-                            #former_bottom_idx = get_nearest(layer-1, contour[-1][0], contour[-1][1])[1]
-
-                        edges.append((left_idx, i))
-
-                        if bottom_vx:
-                            edges.append( (i, vx_idx) )
-
-                            if former_bottom_idx == vx_idx: # tri
-                               faces.append( (left_idx, vx_idx, i) )
-                            else:
-                                if p_i > 0:
-                                    faces.append( [i, left_idx] + list(range(former_bottom_idx, vx_idx+1)) )
-
+        verts, edges, faces = self.gen_mesh(real_contours, wm)
         wm.progress_end()
 
         mesh = bpy.data.meshes.new("Made from slices")
